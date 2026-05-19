@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Code Clone Project</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Prototype</p>
+          <h1>Claude Code Clone</h1>
+          <p class="muted">
+            Starter project sederhana untuk assistant coding dengan gaya CLI +
+            context file.
+          </p>
+        </div>
+
+        <section class="panel">
+          <h2>Project Context</h2>
+          <ul id="context-list" class="context-list">
+            <li>README.md</li>
+            <li>src/app.js</li>
+            <li>tests/app.test.js</li>
+          </ul>
+        </section>
+
+        <section class="panel">
+          <h2>Shortcut</h2>
+          <ul class="shortcut-list">
+            <li><code>/help</code> lihat command</li>
+            <li><code>/add src/auth.js</code> tambah context</li>
+            <li><code>/plan</code> buat rencana kerja</li>
+            <li><code>/run</code> jalankan validasi simulasi</li>
+            <li><code>/clear</code> hapus percakapan</li>
+          </ul>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="hero panel">
+          <div>
+            <p class="eyebrow">Minimal MVP</p>
+            <h2>Mulai bangun cloningan Claude Code</h2>
+            <p class="muted">
+              UI ini menunjukkan alur dasar: input prompt, context file, dan
+              respons assistant untuk workflow coding.
+            </p>
+          </div>
+          <div class="hero-badges">
+            <span>Dependency-free</span>
+            <span>Static HTML/CSS/JS</span>
+            <span>Siap dikembangkan</span>
+          </div>
+        </header>
+
+        <section id="chat" class="chat panel" aria-live="polite"></section>
+
+        <form id="composer" class="composer panel">
+          <label class="sr-only" for="prompt">Prompt</label>
+          <textarea
+            id="prompt"
+            name="prompt"
+            rows="4"
+            placeholder="Tulis task coding atau gunakan /help"
+          ></textarea>
+          <div class="composer-actions">
+            <p class="muted small">
+              Contoh: “Buatkan struktur project untuk coding assistant”
+            </p>
+            <button type="submit">Kirim</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
