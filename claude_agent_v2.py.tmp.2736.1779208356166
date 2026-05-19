@@ -1,0 +1,330 @@
+import os
+import json
+import subprocess
+import re
+from pathlib import Path
+from anthropic import Anthropic
+from typing import Optional, Dict, Any
+
+client = Anthropic(
+    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+    base_url="https://agentrouter.org"
+)
+conversation_history = []
+
+SYSTEM_PROMPT = """Kamu adalah Claude Agent - professional coding assistant.
+
+CAPABILITIES:
+- Execute command (dir, ls, git, npm, python, dll)
+- Read file content
+- Write/create file
+- Edit file (replace text)
+- Analyze code & debugging
+- Project management
+
+RULES:
+1. Selalu jelaskan action sebelum execute
+2. Berikan action dalam format berikut (HARUS ada ```json block):
+
+```json
+{
+  "action": "read_file|write_file|edit_file|command",
+  "details": {
+    "path": "/path/to/file",
+    "content": "for write_file",
+    "old_text": "for edit_file",
+    "new_text": "for edit_file",
+    "cmd": "for command",
+    "description": "what this action does"
+  }
+}
+```
+
+3. Hanya 1 action per response
+4. Explain SEBELUM JSON block
+5. Gunakan absolute paths
+6. On Windows: use backslashes dalam paths
+
+CONTOH FORMAT:
+"Saya akan membaca file untuk analisis. Ini actionnya:"
+```json
+{"action": "read_file", "details": {"path": "C:\\path\\file.txt", "description": "Read file"}}
+```
+
+Jawab pertanyaan dengan helpful & clear."""
+
+class AgentError(Exception):
+    pass
+
+def execute_command(cmd: str, timeout: int = 30) -> Dict[str, Any]:
+    """Execute PowerShell/bash command."""
+    try:
+        # Auto-detect if it's a git/npm command that needs shell
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=os.getcwd()
+        )
+        return {
+            "success": result.returncode == 0,
+            "stdout": result.stdout[:2000],  # Limit output
+            "stderr": result.stderr[:1000],
+            "return_code": result.returncode
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "stderr": "Command timeout"}
+    except Exception as e:
+        return {"success": False, "stderr": str(e)}
+
+def read_file(path: str) -> Dict[str, Any]:
+    """Read file - support various encodings."""
+    try:
+        path = Path(path).resolve()
+        if not path.exists():
+            return {"success": False, "stderr": f"File not found: {path}"}
+
+        if path.is_dir():
+            # If it's a directory, list contents
+            items = list(path.iterdir())
+            files = [str(f.relative_to(path)) for f in items if f.is_file()][:20]
+            folders = [str(f.relative_to(path)) for f in items if f.is_dir()][:20]
+            return {
+                "success": True,
+                "type": "directory",
+                "files": files,
+                "folders": folders,
+                "message": f"Directory: {path}"
+            }
+
+        # Read file
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read(10000)  # Limit to 10KB
+        return {
+            "success": True,
+            "type": "file",
+            "path": str(path),
+            "content": content,
+            "size": len(content)
+        }
+    except Exception as e:
+        return {"success": False, "stderr": str(e)}
+
+def write_file(path: str, content: str) -> Dict[str, Any]:
+    """Write/create file."""
+    try:
+        path = Path(path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return {
+            "success": True,
+            "message": f"File created/updated: {path}",
+            "path": str(path)
+        }
+    except Exception as e:
+        return {"success": False, "stderr": str(e)}
+
+def edit_file(path: str, old_text: str, new_text: str) -> Dict[str, Any]:
+    """Edit file by replacing text."""
+    try:
+        path = Path(path).resolve()
+        if not path.exists():
+            return {"success": False, "stderr": f"File not found: {path}"}
+
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+        if old_text not in content:
+            return {
+                "success": False,
+                "stderr": f"Text not found in file. Searched for:\n{old_text[:200]}"
+            }
+
+        new_content = content.replace(old_text, new_text, 1)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+
+        return {
+            "success": True,
+            "message": "File edited successfully",
+            "path": str(path),
+            "changes": f"Replaced {len(old_text)} chars with {len(new_text)} chars"
+        }
+    except Exception as e:
+        return {"success": False, "stderr": str(e)}
+
+def extract_json_from_response(response_text: str) -> Optional[Dict]:
+    """Extract JSON action from Claude response."""
+    # Look for ```json ... ``` block
+    json_pattern = r'```json\s*(.*?)\s*```'
+    match = re.search(json_pattern, response_text, re.DOTALL)
+
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: try to find raw JSON
+    try:
+        start = response_text.find('{"action"')
+        if start >= 0:
+            # Find matching closing brace
+            depth = 0
+            for i, char in enumerate(response_text[start:]):
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return json.loads(response_text[start:start + i + 1])
+    except:
+        pass
+
+    return None
+
+def execute_action(action_data: Dict) -> Dict[str, Any]:
+    """Execute action specified in JSON."""
+    try:
+        action = action_data.get("action")
+        details = action_data.get("details", {})
+
+        if action == "command":
+            cmd = details.get("cmd")
+            if not cmd:
+                return {"success": False, "stderr": "No command specified"}
+            print(f"   💻 Running: {cmd}")
+            return execute_command(cmd)
+
+        elif action == "read_file":
+            path = details.get("path")
+            if not path:
+                return {"success": False, "stderr": "No path specified"}
+            print(f"   📖 Reading: {path}")
+            return read_file(path)
+
+        elif action == "write_file":
+            path = details.get("path")
+            content = details.get("content", "")
+            if not path:
+                return {"success": False, "stderr": "No path specified"}
+            print(f"   ✍️  Creating: {path}")
+            return write_file(path, content)
+
+        elif action == "edit_file":
+            path = details.get("path")
+            old_text = details.get("old_text", "")
+            new_text = details.get("new_text", "")
+            if not path or not old_text:
+                return {"success": False, "stderr": "Missing path or old_text"}
+            print(f"   ✏️  Editing: {path}")
+            return edit_file(path, old_text, new_text)
+
+        else:
+            return {"success": False, "stderr": f"Unknown action: {action}"}
+
+    except Exception as e:
+        return {"success": False, "stderr": str(e)}
+
+def chat_with_agent(user_message: str) -> str:
+    """Send message to Claude Agent."""
+    conversation_history.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    # Limit history to prevent token overflow
+    if len(conversation_history) > 30:
+        conversation_history.pop(0)
+
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=2048,
+            system=SYSTEM_PROMPT,
+            messages=conversation_history
+        )
+
+        assistant_message = response.content[0].text
+        conversation_history.append({
+            "role": "assistant",
+            "content": assistant_message
+        })
+
+        return assistant_message
+
+    except Exception as e:
+        conversation_history.pop()
+        raise AgentError(f"Claude error: {str(e)}")
+
+def main():
+    """Main agent loop."""
+    print("=" * 70)
+    print("🤖 Claude Agent v2.0 - Code Assistant with File & Command Access")
+    print("=" * 70)
+    print("\n📝 Commands:")
+    print("  - 'baca <file>'           : Read file")
+    print("  - 'buat <file>'           : Create file")
+    print("  - 'edit <file>'           : Edit file")
+    print("  - 'jalanin <cmd>'         : Execute command")
+    print("  - 'debug <file>'          : Debug code")
+    print("  - 'exit'                  : Quit\n")
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+
+            if user_input.lower() == "exit":
+                print("Goodbye! 👋")
+                break
+
+            if not user_input:
+                continue
+
+            print("\n🤔 Thinking...\n")
+            response = chat_with_agent(user_input)
+            print(f"Claude:\n{response}\n")
+
+            # Check for action
+            action_data = extract_json_from_response(response)
+
+            if action_data:
+                print("-" * 70)
+                print("📋 Detected action:")
+
+                # Show what will be done
+                action = action_data.get("action")
+                details = action_data.get("details", {})
+                desc = details.get("description", "")
+                print(f"   Action: {action}")
+                print(f"   Description: {desc}")
+
+                # Ask for approval
+                approve = input("\n✅ Approve? (y/n): ").strip().lower()
+
+                if approve == 'y':
+                    print()
+                    result = execute_action(action_data)
+                    print(f"\n📊 Result:")
+                    print(json.dumps(result, indent=2, ensure_ascii=False)[:1000])
+
+                    # Send result back to Claude for analysis
+                    print("\n🤔 Processing result...\n")
+                    followup_msg = f"Action completed. Result:\n{json.dumps(result)}\n\nSilakan analisis/jelaskan hasilnya dan next step jika ada."
+                    followup = chat_with_agent(followup_msg)
+                    print(f"Claude:\n{followup}\n")
+                else:
+                    print("❌ Action cancelled\n")
+
+        except AgentError as e:
+            print(f"❌ {str(e)}\n")
+        except KeyboardInterrupt:
+            print("\n\nInterrupted. Type 'exit' to quit.\n")
+        except Exception as e:
+            print(f"❌ Unexpected error: {str(e)}\n")
+
+if __name__ == "__main__":
+    main()

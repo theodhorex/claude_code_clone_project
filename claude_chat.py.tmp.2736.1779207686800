@@ -1,0 +1,52 @@
+import os
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+    base_url="https://agentrouter.org/v1"
+)
+conversation_history = []
+
+def chat(user_message):
+    """Send a message and get a response from Claude."""
+    conversation_history.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        messages=conversation_history
+    )
+
+    assistant_message = response.content[0].text
+    conversation_history.append({
+        "role": "assistant",
+        "content": assistant_message
+    })
+
+    return assistant_message
+
+def main():
+    """Main chat loop."""
+    print("Claude Chat (Opus 4.6) - Type 'exit' to quit")
+    print("-" * 50)
+
+    while True:
+        user_input = input("You: ").strip()
+
+        if user_input.lower() == "exit":
+            print("Goodbye!")
+            break
+
+        if not user_input:
+            continue
+
+        print("Claude: ", end="", flush=True)
+        response = chat(user_input)
+        print(response)
+        print()
+
+if __name__ == "__main__":
+    main()
